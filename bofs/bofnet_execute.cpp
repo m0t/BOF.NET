@@ -187,7 +187,7 @@ static VARIANT invokeStaticMethod(mscorlib::_Type* type, const BSTR method, int 
                                           nullptr, vtEmpty, saArgs, &result);
 
     if(hr != S_OK){
-        log("Failed to invoke member 0x%x", hr);
+        log("[!] Failed to invoke member 0x%x", hr);
     }
 
     SafeArrayDestroy(saArgs);
@@ -300,17 +300,17 @@ static ICorRuntimeHost* loadCLR(bool v4){
                 hr = pClrRuntimeHost->Start();
                 hr = pRuntimeInfo->GetInterface(CLSID_RTH, IID_RTH, (LPVOID *)&result);
             }else{
-                log("Failed to get CLR runtime host: 0x%x", hr);
+                log("[!] Failed to get CLR runtime host: 0x%x", hr);
             }
         }else{
-            log("Failed to get v4 runtime info: 0x%x", hr);
+            log("[!] Failed to get v4 runtime info: 0x%x", hr);
         }
 
     }else{
         if( (hr = CoCreateInstance(CLSID_RTH, nullptr, CLSCTX_ALL, IID_RTH,(LPVOID*)&result)) == S_OK){
             hr = result->Start();
         }else{
-            log("Failed to get v2 ICorRuntimeHost: 0x%x", hr);
+            log("[!] Failed to get v2 ICorRuntimeHost: 0x%x", hr);
         }
     }
 
@@ -366,7 +366,7 @@ static mscorlib::_AppDomain* initialiseChildBOFNETAppDomain(const wchar_t* appDo
             hr = assembly->GetType_2(SysAllocString(L"BOFNET.Runtime"), &bofnetInitalizerType);
 
             if(bofnetInitalizerType == nullptr){
-                log("Failed to get BOFNET.Runtime type: 0x%x\n", hr);
+                log("[!] Failed to get BOFNET.Runtime type: 0x%x\n", hr);
                 return nullptr;
             }
 
@@ -528,10 +528,12 @@ static void goWithBypasses(char* args , int len) {
 extern "C" void go(char* args , int len) {
 
     //Setup our hardware breakpoint on AMSI and the VEH
-    HANDLE hExHandler = setupBypasses();
+    HANDLE amsiExHandler = setupAmsiBypasses();
+    HANDLE etwExHandler = setupETWBypass();
 
     goWithBypasses(args,len);
 
     //Clear our hardware breakpoints and VEH
-    clearBypasses(hExHandler);
+    clearBypasses(amsiExHandler);
+    clearBypasses(etwExHandler);
 }

